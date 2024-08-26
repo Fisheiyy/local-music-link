@@ -3,6 +3,8 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async'; // Import dart:async for Timer
 import 'package:uuid/uuid.dart';
+import 'package:flutter_volume_controller/flutter_volume_controller.dart';
+import 'package:universal_platform/universal_platform.dart';
 
 void main() {
   runApp(const MyApp());
@@ -35,10 +37,10 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   String hostname = '';
-  int port = 0;
-  String username = '';
-  String password = '';
-  final String uniqueId = Uuid().v4(); // Generate a unique ID
+  int port = 8000;
+  String username = 'admin';
+  String password = 'password';
+  final String uniqueId = const Uuid().v4(); // Generate a unique ID
   List<String> clients = [];
   String? selectedClient;
   String responseMessage = '';
@@ -47,13 +49,61 @@ class _MyHomePageState extends State<MyHomePage> {
   String? selectedExternalClient = '';
   int currentTrack = 0;
   int currentVolume = 0;
+  int volumeIncrement = 1; // global default placeholder
+  String platform = UniversalPlatform.operatingSystem.toString();
   Map<String, dynamic>? clientState; // Define clientState
 
   @override
   void initState() {
     super.initState();
-    fetchClients();
+    clientInit(); // initialize client details
+  }
+
+  Future<void> clientInit() async {
+    switch (platform) {
+      case 'OperatingSystem.android':
+        volumeIncrement =
+            8; // Android volume increment 100/15 = 6.67 + 1 for vol to incr
+        break;
+      case 'OperatingSystem.ios':
+        volumeIncrement =
+            7; // iOS volume increment 100/16 = 6.25 + 1 for vol to incr
+        break;
+      default:
+        volumeIncrement = 1; // default volume increment
+    }
     startHeartbeat();
+    fetchClients();
+    _getVolume();
+    sendClientState();
+    FlutterVolumeController.addListener(
+      (volume) {
+        print('Volume changed: $volume');
+        setState(() {
+          currentVolume = (volume * 100).toInt(); // Convert to percentage
+        });
+        sendCommand('CHANGE_VOLUME $uniqueId $currentVolume');
+      },
+    );
+  }
+
+  Future<void> _getVolume() async {
+    double? volume = await FlutterVolumeController.getVolume();
+    setState(() {
+      currentVolume = (volume! * 100).toInt(); // Convert to percentage
+    });
+  }
+
+  Future<void> _setVolume(int volume) async {
+    if (volume == currentVolume) {
+      print('Volume already set to $volume');
+      return;
+    } else if (volume != currentVolume) {
+      print('Setting volume to $volume');
+      await FlutterVolumeController.setVolume(
+          volume / 100); // Convert to 0-1 range
+      _getVolume();
+    }
   }
 
   Future<void> fetchClients() async {
@@ -67,7 +117,7 @@ class _MyHomePageState extends State<MyHomePage> {
     try {
       final response = await http
           .post(url, headers: headers, body: 'GET_CLIENTS')
-          .timeout(Duration(seconds: 10));
+          .timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         setState(() {
           if (response.body == '[]') {
@@ -92,6 +142,9 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> fetchClientState(String clientId) async {
+    if (clientId == '') {
+      return;
+    }
     final url = Uri.http('$hostname:$port', '/client_state');
     final credentials = base64Encode(utf8.encode('$username:$password'));
     final headers = {
@@ -102,16 +155,15 @@ class _MyHomePageState extends State<MyHomePage> {
     try {
       final response = await http
           .post(url, headers: headers, body: 'GET_CLIENT_STATE $clientId')
-          .timeout(Duration(seconds: 10));
+          .timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         setState(() {
           clientState = jsonDecode(response.body);
-          print(clientState!['client_id']);
           if (selectedClient == null) {
           } else if (clientState!['client_id'] == uniqueId) {
-            print("set self");
             currentTrack = int.parse(clientState!['state']['Track']);
             currentVolume = int.parse(clientState!['state']['Volume']);
+            _setVolume(currentVolume); // Set the device volume
           } else {
             print("set external");
             externalClientcurrentTrack =
@@ -120,7 +172,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 int.parse(clientState!['state']['Volume']);
           }
         });
-        sendClientState();
+        //sendClientState();
       } else {
         setState(() {
           responseMessage = 'Failed to fetch client state';
@@ -133,7 +185,7 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  // send current client state to server
+  // send state for current client to server
   Future<void> sendClientState() async {
     final url = Uri.http('$hostname:$port', '/client_state');
     final credentials = base64Encode(utf8.encode('$username:$password'));
@@ -147,8 +199,8 @@ class _MyHomePageState extends State<MyHomePage> {
           .post(url,
               headers: headers,
               body:
-                  'SET_CLIENT_STATE $uniqueId\n Track $externalClientcurrentTrack\nVolume $externalClientcurrentVolume')
-          .timeout(Duration(seconds: 10));
+                  'SET_CLIENT_STATE $uniqueId\n Track $externalClientcurrentTrack\nVolume $externalClientcurrentVolume\n Platform $platform')
+          .timeout(const Duration(seconds: 10));
       if (response.statusCode != 200) {
         print('Failed to send client state');
       }
@@ -168,7 +220,7 @@ class _MyHomePageState extends State<MyHomePage> {
     try {
       final response = await http
           .post(url, headers: headers, body: command)
-          .timeout(Duration(seconds: 10));
+          .timeout(const Duration(seconds: 10));
       setState(() {
         responseMessage = response.body;
       });
@@ -198,11 +250,15 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void changeVolume(int delta, [String? selectedClient]) {
+    print(currentVolume);
+    _getVolume();
     if (selectedClient != null) {
       if (selectedClient == uniqueId) {
         setState(() {
-          currentVolume += delta;
+          currentVolume = (currentVolume + delta)
+              .clamp(0, 100); // Ensure volume stays within 0-100
         });
+        _setVolume(currentVolume); // Set the device volume
         sendCommand('CHANGE_VOLUME $selectedClient $currentVolume');
       } else if (selectedClient == selectedExternalClient) {
         setState(() {
@@ -217,7 +273,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void startHeartbeat() {
-    Timer.periodic(Duration(seconds: 15), (timer) async {
+    Timer.periodic(const Duration(seconds: 15), (timer) async {
       final url = Uri.http('$hostname:$port', '/heartbeat');
       final credentials = base64Encode(utf8.encode('$username:$password'));
       final headers = {
@@ -226,16 +282,22 @@ class _MyHomePageState extends State<MyHomePage> {
       };
 
       try {
+        print('Sending heartbeat');
         final response = await http
             .post(url, headers: headers, body: 'HEARTBEAT $uniqueId')
-            .timeout(Duration(seconds: 10));
+            .timeout(const Duration(seconds: 10));
         if (response.statusCode != 200) {
           print('Failed to send heartbeat');
         }
-        if (response.body != 'OK') {
+        if (response.body == 'Heartbeat received') {
+          print('Heartbeat successful: ${response.body}');
           fetchClientState(uniqueId);
           fetchClients();
-          fetchClientState(selectedExternalClient!);
+          if (selectedExternalClient != null || selectedExternalClient != '') {
+            fetchClientState(selectedExternalClient!);
+          }
+        } else {
+          print('Heartbeat failed: ${response.body}');
         }
       } catch (e) {
         print('Error sending heartbeat: $e');
@@ -344,7 +406,8 @@ class _MyHomePageState extends State<MyHomePage> {
                 Expanded(
                   child: IconButton(
                     icon: const Icon(Icons.add),
-                    onPressed: () => changeVolume(1, selectedExternalClient),
+                    onPressed: () =>
+                        changeVolume(volumeIncrement, selectedExternalClient),
                   ),
                 ),
               ],
@@ -381,7 +444,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 Expanded(
                   child: IconButton(
                     icon: const Icon(Icons.add),
-                    onPressed: () => changeVolume(1, uniqueId),
+                    onPressed: () => changeVolume(volumeIncrement, uniqueId),
                   ),
                 ),
               ],
@@ -466,6 +529,7 @@ class _SettingsPageState extends State<SettingsPage> {
     portController.dispose();
     usernameController.dispose();
     passwordController.dispose();
+    FlutterVolumeController.removeListener();
     super.dispose();
   }
 

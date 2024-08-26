@@ -1,6 +1,6 @@
 {
-	"username": "",
-	"password": "",
+	"username": "admin",
+	"password": "password",
 	"hostname": "",
-	"port": 0
+	"port": 8000
 }

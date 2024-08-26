@@ -4,8 +4,8 @@ import json
 import time
 import threading
 
-USERNAME = ''
-PASSWORD = ''
+USERNAME = 'admin'
+PASSWORD = 'password'
 
 class MyServer(BaseHTTPRequestHandler):
     connected_clients = {}
@@ -29,7 +29,7 @@ class MyServer(BaseHTTPRequestHandler):
         username, password = decoded_credentials.split(':')
 
         if username == USERNAME and password == PASSWORD:
-            print("Authentication successful")
+            #print("Authentication successful")
             return True
         else:
             self.send_response(401)
@@ -46,7 +46,7 @@ class MyServer(BaseHTTPRequestHandler):
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length).decode('utf-8')
         command_parts = post_data.split()
-        print(command_parts)
+        print("\nCommand ", command_parts)
 
         if len(command_parts) == 1 and command_parts[0] == "GET_CLIENTS":
             response = json.dumps(list(MyServer.connected_clients.keys()))
